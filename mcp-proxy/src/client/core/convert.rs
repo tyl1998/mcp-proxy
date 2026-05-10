@@ -103,10 +103,22 @@ pub async fn run_url_mode_with_retry(
     tracing::info!("Using protocol: {}", protocol_name(&protocol));
     match protocol {
         crate::client::protocol::McpProtocol::Sse => {
-            run_sse_mode(config, args.clone(), tool_filter, verbose, quiet).await
+            run_sse_mode(config, args.clone(), tool_filter, verbose, quiet)
+                .await
+                .map_err(|e| {
+                    tracing::error!("SSE mode failed: {:?}", e);
+                    eprintln!("❌ SSE mode failed: {}", e);
+                    e
+                })
         }
         crate::client::protocol::McpProtocol::Stream => {
-            run_stream_mode(config, args.clone(), tool_filter, verbose, quiet).await
+            run_stream_mode(config, args.clone(), tool_filter, verbose, quiet)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Stream mode failed: {:?}", e);
+                    eprintln!("❌ Stream mode failed: {}", e);
+                    e
+                })
         }
         crate::client::protocol::McpProtocol::Stdio => {
             tracing::error!("Stdio protocol does not support URL conversion");
@@ -125,9 +137,20 @@ pub fn build_mcp_config(
 ) -> McpClientConfig {
     let mut config = McpClientConfig::new(url);
     for (k, v) in headers {
-        config = config.with_header(k, v);
+        // Authorization header: 确保有 "Bearer " 前缀，与 Server 模式行为一致
+        if k.eq_ignore_ascii_case("Authorization") {
+            let value = if v.starts_with("Bearer ") {
+                v.clone()
+            } else {
+                format!("Bearer {}", v)
+            };
+            config = config.with_header(k, value);
+        } else {
+            config = config.with_header(k, v);
+        }
     }
     if let Some(auth_value) = auth {
+        // 命令行 --auth 参数不带 "Bearer " 前缀，直接添加
         config = config.with_header("Authorization", auth_value);
     }
     config

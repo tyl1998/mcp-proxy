@@ -20,6 +20,7 @@ use crate::{
 
 use anyhow::{Context, Result};
 use log::{debug, info};
+use std::collections::HashMap;
 
 /// Start an MCP service based on configuration
 ///
@@ -75,9 +76,14 @@ pub async fn integrate_server_with_axum(
         // URL config: parse type field or auto-detect
         McpServerConfig::Url(url_config) => {
             // Merge headers + auth_token for protocol detection
-            let mut detection_headers = url_config.headers.clone().unwrap_or_default();
+            let mut detection_headers = normalize_headers(&url_config.headers).unwrap_or_default();
             if let Some(auth_token) = &url_config.auth_token {
-                detection_headers.insert("Authorization".to_string(), auth_token.clone());
+                let value = if auth_token.starts_with("Bearer ") {
+                    auth_token.clone()
+                } else {
+                    format!("Bearer {}", auth_token)
+                };
+                detection_headers.insert("Authorization".to_string(), value);
             }
             let detection_headers_ref = if detection_headers.is_empty() {
                 None
@@ -146,7 +152,14 @@ pub async fn integrate_server_with_axum(
             };
 
             // Build backend config for SSE
-            let backend_config = build_sse_backend_config(&mcp_config, backend_protocol)?;
+            let backend_config = if matches!(backend_protocol, McpProtocol::Stream) {
+                // Streamable HTTP backend: connect via mcp-streamable-proxy (rmcp 1.4.0),
+                // then pass as BackendBridge to decouple mcp-sse-proxy from mcp-streamable-proxy
+                let bridge = connect_stream_backend(&mcp_config, &mcp_id).await?;
+                SseBackendConfig::BackendBridge(bridge)
+            } else {
+                build_sse_backend_config(&mcp_config, backend_protocol)?
+            };
 
             debug!(
                 "Creating SSE server, sse_path={}, post_path={}",
@@ -278,6 +291,57 @@ pub async fn integrate_server_with_axum(
     Ok((router, ct))
 }
 
+/// Connect to a Streamable HTTP backend and return a BackendBridge
+///
+/// This lives in mcp-proxy (not mcp-sse-proxy) because it uses mcp-streamable-proxy types.
+/// The returned `Arc<dyn BackendBridge>` is protocol-agnostic, allowing mcp-sse-proxy
+/// to use it without depending on mcp-streamable-proxy.
+async fn connect_stream_backend(
+    mcp_config: &McpServerConfig,
+    mcp_id: &str,
+) -> Result<std::sync::Arc<dyn mcp_common::BackendBridge>> {
+    use crate::proxy::{StreamClientConnection, StreamProxyHandler};
+
+    let url_config = match mcp_config {
+        McpServerConfig::Url(url_config) => url_config,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Stream backend requires URL-based config"
+            ))
+        }
+    };
+
+    let url = url_config.get_url();
+    info!(
+        "Connecting to Streamable HTTP backend (SSE frontend) \
+         - MCP ID: {}, URL: {}",
+        mcp_id, url
+    );
+
+    let mut config = mcp_common::McpClientConfig::new(url.to_string());
+    let normalized = normalize_headers(&url_config.headers);
+    if let Some(ref headers) = normalized {
+        for (k, v) in headers {
+            config = config.with_header(k, v);
+        }
+    }
+    // auth_token 合并到 Authorization header（与 build_sse_backend_config 逻辑一致）
+    if let Some(ref auth_token) = url_config.auth_token {
+        let value = if auth_token.starts_with("Bearer ") {
+            auth_token.clone()
+        } else {
+            format!("Bearer {}", auth_token)
+        };
+        config = config.with_header("Authorization", value);
+    }
+
+    let conn = StreamClientConnection::connect(config).await?;
+    let proxy_handler =
+        StreamProxyHandler::with_mcp_id(conn.into_running_service(), mcp_id.to_string());
+
+    Ok(std::sync::Arc::new(proxy_handler))
+}
+
 /// Build SSE backend configuration from MCP server config
 fn build_sse_backend_config(
     mcp_config: &McpServerConfig,
@@ -300,19 +364,13 @@ fn build_sse_backend_config(
                 info!("Connecting to SSE backend: {}", url_config.get_url());
                 Ok(SseBackendConfig::SseUrl {
                     url: url_config.get_url().to_string(),
-                    headers: url_config.headers.clone(),
+                    headers: normalize_headers(&url_config.headers),
                 })
             }
-            McpProtocol::Stream => {
-                info!(
-                    "Connecting to Streamable HTTP backend (SSE frontend): {}",
-                    url_config.get_url()
-                );
-                Ok(SseBackendConfig::StreamUrl {
-                    url: url_config.get_url().to_string(),
-                    headers: url_config.headers.clone(),
-                })
-            }
+            McpProtocol::Stream => Err(anyhow::anyhow!(
+                "Stream backend should be handled via connect_stream_backend(), \
+                 not build_sse_backend_config()"
+            ))
         },
     }
 }
@@ -352,12 +410,30 @@ fn build_stream_backend_config(
                     );
                     Ok(StreamBackendConfig::Url {
                         url: url_config.get_url().to_string(),
-                        headers: url_config.headers.clone(),
+                        headers: normalize_headers(&url_config.headers),
                     })
                 }
             }
         }
     }
+}
+
+/// 规范化 headers：确保 Authorization header 有 "Bearer " 前缀
+///
+/// 与 client 模式 (`convert.rs:build_mcp_config`) 行为一致，
+/// 对没有 "Bearer " 前缀的 Authorization header 自动添加前缀。
+fn normalize_headers(headers: &Option<HashMap<String, String>>) -> Option<HashMap<String, String>> {
+    headers.as_ref().map(|h| {
+        h.iter()
+            .map(|(k, v)| {
+                if k.eq_ignore_ascii_case("Authorization") && !v.starts_with("Bearer ") {
+                    (k.clone(), format!("Bearer {}", v))
+                } else {
+                    (k.clone(), v.clone())
+                }
+            })
+            .collect()
+    })
 }
 
 /// Log command execution details for debugging
@@ -512,3 +588,5 @@ async fn base_path_fallback_handler(
         )
     }
 }
+
+
