@@ -129,11 +129,11 @@ RUN mkdir -p /app/logs
 # 暴露端口和健康检查
 # ==============================================================================
 # 暴露端口
-EXPOSE 8080
+EXPOSE 8089
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8089/health || exit 1
 
 # 入口点 - 服务器模式会自动加载 /app/config.yml
 ENTRYPOINT ["/app/mcp-proxy"]
