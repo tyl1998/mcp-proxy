@@ -6,10 +6,16 @@ IMAGE_TAG="${IMAGE_TAG:-local}"
 CONTAINER_NAME="${CONTAINER_NAME:-nuwax-mcp-proxy}"
 HOST_PORT="${HOST_PORT:-8020}"
 APP_PORT="${MCP_PROXY_PORT:-8089}"
-CONFIG_FILE="${CONFIG_FILE:-/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker/config/mcp_config.yml}"
-LOG_DIR="${LOG_DIR:-/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker/logs/mcp_proxy}"
-UV_CACHE_DIR="${UV_CACHE_DIR:-/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker/data/uv_cache/uv}"
-NPM_CACHE_DIR="${NPM_CACHE_DIR:-/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker/data/npx_cache/.npm}"
+
+# DEPLOY_DIR 为 nuwax_deploy/docker 目录的宿主机绝对路径
+# 本地 macOS 示例：/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker
+# Linux 服务器示例：/opt/nuwax/nuwax_deploy/docker
+DEPLOY_DIR="${DEPLOY_DIR:?请设置 DEPLOY_DIR 环境变量，指向 nuwax_deploy/docker 目录}"
+
+CONFIG_FILE="${CONFIG_FILE:-${DEPLOY_DIR}/config/mcp_config.yml}"
+LOG_DIR="${LOG_DIR:-${DEPLOY_DIR}/logs/mcp_proxy}"
+UV_CACHE_DIR="${UV_CACHE_DIR:-${DEPLOY_DIR}/data/uv_cache/uv}"
+NPM_CACHE_DIR="${NPM_CACHE_DIR:-${DEPLOY_DIR}/data/npx_cache/.npm}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-120}"
 PULL_IMAGE="${PULL_IMAGE:-false}"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
@@ -25,6 +31,7 @@ docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker run -d \
   --name "$CONTAINER_NAME" \
   --restart=always \
+  --add-host=host.docker.internal:host-gateway \
   -p "${HOST_PORT}:${APP_PORT}" \
   -e MCP_PROXY_PORT="$APP_PORT" \
   -e MCP_PROXY_LOG_DIR=/app/logs \
