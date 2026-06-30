@@ -7,15 +7,31 @@ CONTAINER_NAME="${CONTAINER_NAME:-nuwax-mcp-proxy}"
 HOST_PORT="${HOST_PORT:-8020}"
 APP_PORT="${MCP_PROXY_PORT:-8089}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # DEPLOY_DIR 为 nuwax_deploy/docker 目录的宿主机绝对路径
+# 用于挂载日志、缓存等持久化目录
 # 本地 macOS 示例：/Users/atan/Desktop/work/vs_code_nuwax/nuwax_deploy/docker
 # Linux 服务器示例：/opt/nuwax/nuwax_deploy/docker
-DEPLOY_DIR="${DEPLOY_DIR:?请设置 DEPLOY_DIR 环境变量，指向 nuwax_deploy/docker 目录}"
+DEPLOY_DIR="${DEPLOY_DIR:-}"
 
-CONFIG_FILE="${CONFIG_FILE:-${DEPLOY_DIR}/config/mcp_config.yml}"
-LOG_DIR="${LOG_DIR:-${DEPLOY_DIR}/logs/mcp_proxy}"
-UV_CACHE_DIR="${UV_CACHE_DIR:-${DEPLOY_DIR}/data/uv_cache/uv}"
-NPM_CACHE_DIR="${NPM_CACHE_DIR:-${DEPLOY_DIR}/data/npx_cache/.npm}"
+# 配置文件默认使用仓库内的 docker/config/mcp_config.yml
+CONFIG_FILE="${CONFIG_FILE:-${PROJECT_ROOT}/docker/config/mcp_config.yml}"
+
+# 日志和缓存目录：优先使用 DEPLOY_DIR（指向 nuwax_deploy/docker），否则使用项目内 data 目录
+if [[ -n "${DEPLOY_DIR:-}" ]]; then
+  LOG_DIR_DEFAULT="${DEPLOY_DIR}/logs/mcp_proxy"
+  UV_CACHE_DIR_DEFAULT="${DEPLOY_DIR}/data/uv_cache/uv"
+  NPM_CACHE_DIR_DEFAULT="${DEPLOY_DIR}/data/npx_cache/.npm"
+else
+  LOG_DIR_DEFAULT="${PROJECT_ROOT}/data/logs"
+  UV_CACHE_DIR_DEFAULT="${PROJECT_ROOT}/data/uv_cache"
+  NPM_CACHE_DIR_DEFAULT="${PROJECT_ROOT}/data/npm_cache"
+fi
+LOG_DIR="${LOG_DIR:-${LOG_DIR_DEFAULT}}"
+UV_CACHE_DIR="${UV_CACHE_DIR:-${UV_CACHE_DIR_DEFAULT}}"
+NPM_CACHE_DIR="${NPM_CACHE_DIR:-${NPM_CACHE_DIR_DEFAULT}}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-120}"
 PULL_IMAGE="${PULL_IMAGE:-false}"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"

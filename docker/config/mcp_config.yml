@@ -1,0 +1,8 @@
+server:
+  # The port to listen on for incoming connections
+  port: 8089
+# The log level to use
+log:
+  level: info
+  # The path to the log file
+  path: /app/logs
