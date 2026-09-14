@@ -14,7 +14,8 @@ categories = ["web-programming", "network-programming"]
 mcp-common = { version = "0.1.28", path = "../mcp-common" }
 
 # MCP protocol implementation - using forked rmcp-soddygo with non-standard stdout log tolerance
-rmcp = { version = "1.5.0", package = "rmcp-soddygo", features = [
+# 1.8.0: CallToolRequestParams 带 _meta（MRTR inputResponses 透传）+ ProtocolVersion::V_2026_07_28
+rmcp = { version = "1.8.0", package = "rmcp-soddygo", features = [
     "server",
     "client",
     "transport-streamable-http-server",
@@ -46,6 +47,10 @@ tracing = { workspace = true }
 
 # HTTP client
 reqwest = { workspace = true }
+# MRTR 出站三头注入（mrtr_headers.rs）需要与 StreamableHttpClient trait 签名
+# 一致的 http / sse-stream 类型（与 rmcp-soddygo 依赖同一版本源）
+http = { workspace = true }
+sse-stream = "0.2"
 
 # Utilities
 arc-swap = { workspace = true }

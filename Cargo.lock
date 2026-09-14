@@ -4269,8 +4269,6 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38b18323edc657390a6ed4d7a9110b0dec2dc3ed128eb2a123edfbafabdbddc5"
 dependencies = [
  "async-trait",
  "axum",
@@ -4315,9 +4313,7 @@ dependencies = [
 
 [[package]]
 name = "rmcp-soddygo"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "341efcef3a6d92e7490b87b72de959b2e904bcb2207f5fc43315b9fb40b7f827"
+version = "1.8.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -4348,9 +4344,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-soddygo-macros"
-version = "1.5.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c197c92ef11c0cdb432dcb6e4f2f53c2ea5ef153d78ba7cc315ba543b0986d77"
+checksum = "94dc2c1dffcfa77354bb6f58a01947bcb298eabd99f34e1256dc159f834813a0"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",

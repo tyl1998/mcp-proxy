@@ -7,7 +7,7 @@ use rmcp::{
     ErrorData, RoleClient, RoleServer, ServerHandler,
     model::{
         CallToolRequestParam, CallToolResult, ClientInfo, Content, Implementation, ListToolsResult,
-        PaginatedRequestParam, ProtocolVersion, ServerInfo,
+        Meta, PaginatedRequestParam, ProtocolVersion, ServerInfo,
     },
     service::{NotificationContext, Peer, RequestContext, RunningService},
 };
@@ -990,7 +990,7 @@ impl BackendSessionHandler {
         // 从后端获取 ServerInfo（JSON 桥接跨 rmcp 版本）
         // 这确保 SSE 客户端能看到后端实际支持的 capabilities（tools、resources 等）
         let backend_info_json = backend.get_server_info_json();
-        let mut cached_info: rmcp::model::ServerInfo =
+        let cached_info: rmcp::model::ServerInfo =
             serde_json::from_value(backend_info_json).unwrap_or_else(|e| {
                 warn!(
                     "[BackendSessionHandler] Failed to deserialize backend ServerInfo: {}, \
@@ -1000,15 +1000,13 @@ impl BackendSessionHandler {
                 rmcp::model::ServerInfo::default()
             });
 
-        // 关键：强制覆盖 protocol_version 为 SSE 客户端支持的版本
-        // 因为前端是 SSE 协议（rmcp 0.10），后端可能返回更新的版本（如 2025-06-18）
-        // Java SSE SDK 等客户端只支持旧版本，若透传新版本会导致握手失败
-        let backend_version = cached_info.protocol_version.clone();
-        cached_info.protocol_version = rmcp::model::ProtocolVersion::V_2024_11_05;
+        // 透传后端协商到的 protocol_version（与 mcp-streamable-proxy 的 extract_server_info 行为一致）
+        // 注：不再强制降级到 2024-11-05 —— 那是 Java MCP SDK 0.9.0 时代的兼容逻辑，
+        // Java 升级到 0.18.2（LATEST=2025-11-25）后，降级反而导致 initialize 校验失败
         info!(
-            "[BackendSessionHandler] Override protocol_version: backend={:?} → SSE={:?} \
+            "[BackendSessionHandler] Pass through protocol_version: {:?} \
              - MCP ID: {}",
-            backend_version, cached_info.protocol_version, mcp_id
+            cached_info.protocol_version, mcp_id
         );
 
         info!(
@@ -1114,7 +1112,7 @@ impl ServerHandler for BackendSessionHandler {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        mut request: CallToolRequestParam,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let start = std::time::Instant::now();
@@ -1122,6 +1120,15 @@ impl ServerHandler for BackendSessionHandler {
             "[BackendSessionHandler] call_tool request - MCP ID: {}, tool: {}, args: {:?}",
             self.mcp_id, request.name, request.arguments
         );
+
+        // MRTR（MCP 2025-06-18+）：wire 上的 params._meta 被 rmcp 反序列化进
+        // Request.extensions、再被 serve_loop swap 进 context.meta，此时
+        // request.params.meta 为空——转发前必须合并回来，否则确认回合
+        // （_meta.inputResponses）会退化为新的第一回合。
+        if !context.meta.0.is_empty() {
+            let meta = request.meta.get_or_insert_with(Meta::new);
+            meta.extend(context.meta.clone());
+        }
 
         let params = serde_json::to_value(&request)
             .map_err(|e| ErrorData::internal_error(format!("serialize error: {}", e), None))?;

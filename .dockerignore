@@ -72,3 +72,12 @@ deny.toml
 # Keep essential files
 !Cargo.toml
 !Cargo.lock
+
+# vendored 依赖（rmcp 本地补丁）需要完整打包；*.md 与 **/tests/ 会误伤其中的
+# README/Cargo 校验（readme 字段）与测试文件，此处显式放行 vendor 目录。
+!vendor/rmcp-0.10.0/README.md
+!vendor/rmcp-0.10.0/README.patch.md
+!vendor/rmcp-0.10.0/CHANGELOG.md
+!vendor/rmcp-0.10.0/.cargo-ok
+!vendor/rmcp-0.10.0/.cargo_vcs_info.json
+!vendor/**/tests/**

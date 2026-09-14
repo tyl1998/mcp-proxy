@@ -89,16 +89,21 @@ pub async fn run_stream_server_from_config(
     }
 
     // 3. 创建客户端信息
+    // roots/sampling caps 在 rmcp-soddygo 1.8.0 被 SEP-2577 标记 deprecated，
+    // 但现存 MCP server 仍按老 spec 检查，保留声明以兼容。
+    #[expect(deprecated, reason = "keep legacy caps for old MCP servers")]
     let capabilities = ClientCapabilities::builder()
         .enable_experimental()
         .enable_roots()
         .enable_roots_list_changed()
         .enable_sampling()
+        .enable_elicitation()
         .build();
     let client_info = ClientInfo::new(
         capabilities,
         rmcp::model::Implementation::new("mcp-streamable-proxy-server", env!("CARGO_PKG_VERSION")),
-    );
+    )
+    .with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28);
 
     // 4. 连接到子进程
     let client = client_info.serve(tokio_process).await?;
@@ -233,6 +238,12 @@ pub async fn run_stream_server(
     let handler_for_service = handler.clone();
     let mut server_config = StreamableHttpServerConfig::default();
     server_config.stateful_mode = true; // 关键：启用有状态模式
+    // 关闭 rmcp 默认 allowed_hosts 校验（默认仅 localhost）：本服务经
+    // mcp-proxy 动态路由对外暴露，客户端 Host 头是 proxy 地址而非 localhost
+    server_config = server_config.disable_allowed_hosts();
+    // 不发 SSE `retry:` 行（priming）：mcp-core 0.18.2 Java client 的 SSE
+    // 行解析器不认 retry: 指令，会报 Invalid SSE response 使 initialize 失败
+    server_config.sse_retry = None;
     let service = StreamableHttpService::new(
         move || Ok((*handler_for_service).clone()),
         session_manager.into(), // 转换为 Arc<dyn SessionManager>

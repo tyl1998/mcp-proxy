@@ -36,6 +36,7 @@
 pub mod client;
 pub mod config;
 pub mod detector;
+pub mod mrtr_headers;
 pub mod proxy_handler;
 pub mod server;
 pub mod server_builder;
@@ -43,6 +44,7 @@ pub mod session_manager;
 
 // Re-export main types
 pub use mcp_common::McpServiceConfig;
+pub use mrtr_headers::MrtrHeaderClient;
 pub use proxy_handler::{ProxyHandler, ToolFilter};
 pub use server::{run_stream_server, run_stream_server_from_config};
 pub use session_manager::ProxyAwareSessionManager;
@@ -60,7 +62,7 @@ pub use mcp_common::McpClientConfig;
 // Re-export commonly used rmcp types
 pub use rmcp::{
     RoleClient, RoleServer, ServerHandler, ServiceExt,
-    model::{ClientCapabilities, ClientInfo, Implementation, ServerInfo},
+    model::{ClientCapabilities, ClientInfo, Implementation, ProtocolVersion, ServerInfo},
     service::{Peer, RunningService},
 };
 

@@ -32,7 +32,7 @@ use process_wrap::tokio::ProcessGroup;
 #[cfg(windows)]
 use process_wrap::tokio::{CreationFlags, JobObject};
 
-use crate::{ProxyAwareSessionManager, ProxyHandler, ToolFilter};
+use crate::{ProxyAwareSessionManager, ProxyHandler, ToolFilter, mrtr_headers::MrtrHeaderClient};
 pub use mcp_common::ToolFilter as CommonToolFilter;
 
 /// Backend configuration for the MCP server
@@ -138,16 +138,21 @@ impl StreamServerBuilder {
             .unwrap_or_else(|| "stream-proxy".into());
 
         // Create client info for connecting to backend
+        // roots/sampling caps 在 rmcp-soddygo 1.8.0 被 SEP-2577 标记 deprecated，
+        // 但现存 MCP server 仍按老 spec 检查，保留声明以兼容。
+        #[expect(deprecated, reason = "keep legacy caps for old MCP servers")]
         let capabilities = ClientCapabilities::builder()
             .enable_experimental()
             .enable_roots()
             .enable_roots_list_changed()
             .enable_sampling()
+            .enable_elicitation()
             .build();
         let client_info = ClientInfo::new(
             capabilities,
             rmcp::model::Implementation::new("mcp-streamable-proxy", env!("CARGO_PKG_VERSION")),
-        );
+        )
+        .with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28);
 
         // Connect to backend based on configuration
         let client = match &self.backend_config {
@@ -298,7 +303,10 @@ impl StreamServerBuilder {
         let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
         config.auth_header = auth_header;
 
-        let transport = StreamableHttpClientTransport::with_client(http_client, config);
+        // MRTR（2026-07-28）：对携带 envelope 的 tools/call 出站请求注入
+        // Mcp-Method/Mcp-Name/MCP-Protocol-Version 三头（SEP-2243 标准头校验）
+        let transport =
+            StreamableHttpClientTransport::with_client(MrtrHeaderClient::new(http_client), config);
         let client = client_info.clone().serve(transport).await?;
 
         info!("[StreamServerBuilder] URL backend connected successfully");
@@ -320,6 +328,14 @@ impl StreamServerBuilder {
 
             let mut server_config = StreamableHttpServerConfig::default();
             server_config.stateful_mode = true;
+            // 关闭 rmcp 默认的 allowed_hosts 校验（默认仅 localhost/127.0.0.1/::1）：
+            // 平台后端经 docker 服务名/IP 访问 proxy（非 localhost Host 头），
+            // 内部网关与 SSE 腿本就无宿主校验，保持一致
+            server_config = server_config.disable_allowed_hosts();
+            // 不发 SSE `retry:` 行（priming）：mcp-core 0.18.2 Java client 的
+            // SseLineSubscriber 只认 data:/id:/event:/: 注释行，遇到合法的
+            // retry: 指令会报 "Invalid SSE response" 使 initialize 失败
+            server_config.sse_retry = None;
             let service = StreamableHttpService::new(
                 move || Ok((*handler_for_service).clone()),
                 session_manager.into(),
@@ -334,10 +350,18 @@ impl StreamServerBuilder {
 
             let handler_for_service = handler.clone();
 
-            let server_config = StreamableHttpServerConfig::default(); // stateless mode
+            let mut server_config = StreamableHttpServerConfig::default(); // stateless mode
+            server_config = server_config.disable_allowed_hosts();
+            // 同上：不发 SSE retry: 行（Java client 解析器不认）
+            server_config.sse_retry = None;
+
+            // session 级 SessionConfig 是另一个独立的 sse_retry 配置源
+            // （request-wise 流 priming，SessionConfig::default()=3s），需一并关闭
+            let mut session_manager = LocalSessionManager::default();
+            session_manager.session_config.sse_retry = None;
             let service = StreamableHttpService::new(
                 move || Ok((*handler_for_service).clone()),
-                LocalSessionManager::default().into(),
+                session_manager.into(),
                 server_config,
             );
 

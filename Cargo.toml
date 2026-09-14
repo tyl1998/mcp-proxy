@@ -4,7 +4,18 @@ members = ["document-parser", "mcp-common", "mcp-proxy", "mcp-sse-proxy", "mcp-s
 # 默认只构建 mcp-proxy（排除 document-parser 等需要特殊环境的包）
 default-members = ["mcp-proxy", "mcp-common", "mcp-sse-proxy", "mcp-streamable-proxy"]
 resolver = "2"
-exclude = ["fastembed"]
+exclude = ["fastembed", "vendor"]
+
+# rmcp 0.10 本地补丁：给 CallToolRequestParam 增加 _meta 字段
+# （MCP 2025-06-18+ 的 MRTR inputResponses 协议回合需要经 _meta 透传，
+#  官方 rmcp 从 0.11 起自带该字段；0.10 为 SSE 服务端终结版本不再发布，
+#  故 vendor 进仓库打最小补丁。见 vendor/rmcp-0.10.0/README.patch.md）
+# rmcp-soddygo 1.8.0 本地补丁：给 CallToolRequestParams 增加 params 顶层
+# inputResponses 字段（MCP 2026-07-28 MRTR 第二回合载体，TS SDK
+# RETRY_PARAMS_KEYS 保留字，不能放 _meta）。见 vendor/rmcp-soddygo-1.8.0/README.patch.md
+[patch.crates-io]
+rmcp = { path = "vendor/rmcp-0.10.0" }
+rmcp-soddygo = { path = "vendor/rmcp-soddygo-1.8.0" }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

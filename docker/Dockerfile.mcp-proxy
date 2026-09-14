@@ -57,6 +57,8 @@ COPY oss-client/ ./oss-client/
 COPY document-parser/ ./document-parser/
 COPY voice-cli/ ./voice-cli/
 COPY fastembed/ ./fastembed/
+# vendored 依赖（rmcp 等本地补丁）在 Cargo.toml 中通过 path = "vendor/..." 引用，必须一并复制
+COPY vendor/ ./vendor/
 
 # 根据 TARGETARCH 设置交叉编译环境
 RUN echo "=== Starting build process ==="

@@ -6,8 +6,8 @@ pub use mcp_common::ToolFilter;
 use rmcp::{
     ErrorData, RoleClient, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, ClientInfo, Content, Implementation,
-        ListToolsResult, PaginatedRequestParams, ServerInfo,
+        CallToolRequestParams, CallToolResult, ClientInfo, ContentBlock, Implementation,
+        ListToolsResult, Meta, PaginatedRequestParams, ServerInfo,
     },
     service::{NotificationContext, Peer, RequestContext, RunningService},
 };
@@ -177,7 +177,7 @@ impl ServerHandler for ProxyHandler {
                 "[call_tool:{}] Tool is filtered - MCP ID: {}, Tool: {}",
                 request_id, self.mcp_id, request.name
             );
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Tool '{}' is not allowed by filter configuration",
                 request.name
             ))]));
@@ -199,7 +199,7 @@ impl ServerHandler for ProxyHandler {
                     "[call_tool:{}] Backend connection unavailable (reconnecting) - MCP ID: {}",
                     request_id, self.mcp_id
                 );
-                return Ok(CallToolResult::error(vec![Content::text(
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
                     "Backend connection is not available, reconnecting...",
                 )]));
             }
@@ -211,9 +211,18 @@ impl ServerHandler for ProxyHandler {
                 "[call_tool:{}] Backend transport is closed - MCP ID: {}",
                 request_id, self.mcp_id
             );
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Backend connection closed, please retry",
             )]));
+        }
+
+        // MRTR（MCP 2025-06-18+）：请求 envelope 的 _meta（inputResponses 载体）
+        // 被 rmcp serve_loop swap 进 context.meta，params.meta 已被清空——
+        // 转发给后端前必须合并回来，否则确认回合会退化为新的第一回合。
+        let mut forward_request = request;
+        if !context.meta.0.is_empty() {
+            let meta = forward_request.meta.get_or_insert_with(Meta::new);
+            meta.extend(context.meta.clone());
         }
 
         // Check if the server has tools capability and forward the request
@@ -223,12 +232,12 @@ impl ServerHandler for ProxyHandler {
                 info!(
                     "[call_tool:{}] Send request to backend... - Tool: {}, Elapsed time: {}ms",
                     request_id,
-                    request.name,
+                    forward_request.name,
                     start.elapsed().as_millis()
                 );
 
                 // 创建后端调用的 Future，使用 pin 固定
-                let call_future = inner.peer.call_tool(request.clone());
+                let call_future = inner.peer.call_tool(forward_request.clone());
                 tokio::pin!(call_future);
 
                 // 等待心跳间隔（30秒）
@@ -250,9 +259,9 @@ impl ServerHandler for ProxyHandler {
                             let elapsed = start.elapsed();
                             warn!(
                                 "[call_tool:{}] Request canceled - Tool: {}, Time taken: {}ms, MCP ID: {}",
-                                request_id, request.name, elapsed.as_millis(), self.mcp_id
+                                request_id, forward_request.name, elapsed.as_millis(), self.mcp_id
                             );
-                            return Ok(CallToolResult::error(vec![Content::text(
+                            return Ok(CallToolResult::error(vec![ContentBlock::text(
                                 "Request cancelled"
                             )]));
                         }
@@ -262,7 +271,7 @@ impl ServerHandler for ProxyHandler {
                             let transport_closed = inner.peer.is_transport_closed();
                             info!(
                                 "[call_tool:{}] Waiting for backend response... - Tool: {}, Waiting: {}ms, \\ transport_closed: {}, MCP ID: {}",
-                                request_id, request.name, elapsed.as_millis(),
+                                request_id, forward_request.name, elapsed.as_millis(),
                                 transport_closed, self.mcp_id
                             );
                         }
@@ -277,7 +286,7 @@ impl ServerHandler for ProxyHandler {
                         info!(
                             "[call_tool:{}] Response received - tool: {}, time taken: {}ms, is_error: {}, MCP ID: {}",
                             request_id,
-                            request.name,
+                            forward_request.name,
                             elapsed.as_millis(),
                             is_error,
                             self.mcp_id
@@ -294,13 +303,13 @@ impl ServerHandler for ProxyHandler {
                         error!(
                             "[call_tool:{}] Backend returns error - Tool: {}, Time: {}ms, Error: {:?}, MCP ID: {}",
                             request_id,
-                            request.name,
+                            forward_request.name,
                             elapsed.as_millis(),
                             err,
                             self.mcp_id
                         );
                         // Return an error result instead of propagating the error
-                        Ok(CallToolResult::error(vec![Content::text(format!(
+                        Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                             "Error: {err}"
                         ))]))
                     }
@@ -311,7 +320,7 @@ impl ServerHandler for ProxyHandler {
                     "[call_tool:{}] The server does not support tools capability - MCP ID: {}",
                     request_id, self.mcp_id
                 );
-                Ok(CallToolResult::error(vec![Content::text(
+                Ok(CallToolResult::error(vec![ContentBlock::text(
                     "Server doesn't support tools capability",
                 )]))
             }
@@ -321,7 +330,7 @@ impl ServerHandler for ProxyHandler {
         info!(
             "[call_tool:{}] Completed - Tool: {}, total time taken: {}ms",
             request_id,
-            request.name,
+            forward_request.name,
             total_elapsed.as_millis()
         );
         result

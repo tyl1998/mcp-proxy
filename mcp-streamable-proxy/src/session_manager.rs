@@ -74,6 +74,12 @@ impl ProxyAwareSessionManager {
         );
         let mut inner = LocalSessionManager::default();
         inner.session_config.keep_alive = Some(keep_alive);
+        // 不发 request-wise SSE 流的 priming 事件（id: 0/0 + retry: 3000）：
+        // mcp-core 0.18.2 Java client 的 SseLineSubscriber 只认 data:/id:/
+        // event:/: 注释行，遇到 retry: 指令报 Invalid SSE response（tools/list
+        // 等带 session 的第二个请求即失败）。SessionConfig::default() 的 3s
+        // retry 与 StreamableHttpServerConfig.sse_retry 是两个独立配置源
+        inner.session_config.sse_retry = None;
         Self {
             inner,
             handler,

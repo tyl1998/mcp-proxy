@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::proxy_handler::ProxyHandler;
+use crate::mrtr_headers::MrtrHeaderClient;
 use mcp_common::ToolFilter;
 
 /// 自定义的指数退避重试策略，支持最大间隔限制
@@ -130,7 +131,10 @@ impl StreamClientConnection {
         let mut transport_config = StreamableHttpClientTransportConfig::with_uri(config.url.clone());
         transport_config.retry_config = Arc::new(retry_policy);
 
-        let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
+        // MRTR（2026-07-28）：对携带 envelope 的 tools/call 出站请求注入
+        // Mcp-Method/Mcp-Name/MCP-Protocol-Version 三头（SEP-2243 标准头校验）
+        let transport =
+            StreamableHttpClientTransport::with_client(MrtrHeaderClient::new(http_client), transport_config);
 
         let client_info = create_default_client_info();
         let running = client_info
@@ -161,8 +165,10 @@ impl StreamClientConnection {
     }
 
     /// Get the peer info from the server
-    pub fn peer_info(&self) -> Option<&rmcp::model::ServerInfo> {
-        self.inner.peer_info()
+    pub fn peer_info(&self) -> Option<rmcp::model::ServerInfo> {
+        self.inner
+            .peer_info()
+            .map(|info| (*info).clone())
     }
 
     /// Convert this connection into a ProxyHandler for serving
@@ -221,17 +227,27 @@ fn build_http_client(config: &McpClientConfig) -> Result<reqwest::Client> {
 }
 
 /// Create default client info for MCP handshake
+///
+/// roots/sampling capabilities 在 rmcp-soddygo 1.8.0 被 SEP-2577 标记 deprecated，
+/// 但大量现存 MCP server（含我们自己的 apitest）仍按老 spec 检查这些能力，
+/// 保留声明以兼容，故 suppress deprecation warning。
+#[expect(deprecated, reason = "roots/sampling caps still checked by legacy MCP servers")]
 fn create_default_client_info() -> ClientInfo {
     let capabilities = ClientCapabilities::builder()
         .enable_experimental()
         .enable_roots()
         .enable_roots_list_changed()
         .enable_sampling()
+        .enable_elicitation()
         .build();
     ClientInfo::new(
         capabilities,
         Implementation::new("mcp-streamable-proxy-client", env!("CARGO_PKG_VERSION")),
     )
+    // 请求 MRTR 协议版本（2026-07-28）：input_required 工具结果 + _meta.inputResponses
+    // 协议回合仅在 2026-07-28 连接上激活；老后端会降级协商，服务端宽容接受。
+    // 注意 rmcp-soddygo 1.8.0 的 LATEST 常量仍保守为 2025-11-25，此处显式指定。
+    .with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28)
 }
 
 #[cfg(test)]

@@ -102,83 +102,99 @@ impl Service<Request<Body>> for DynamicRouterService {
                         if let Some(router_path) = mcp_id_for_check {
                             let proxy_manager = get_proxy_manager();
 
-                            // ===== 首先检查服务状态 =====
-                            // 如果服务状态是 Pending，说明服务正在初始化中（uvx/npx 下载中）
-                            // 此时不应该做健康检查，应该等待
-                            if let Some(service_status) =
-                                proxy_manager.get_mcp_service_status(&router_path.mcp_id)
-                            {
-                                match &service_status.check_mcp_status_response_status {
-                                    CheckMcpStatusResponseStatus::Pending => {
-                                        debug!(
-                                            "[MCP status check] mcp_id={} The status is Pending, the service is being initialized, and 503 is returned.",
-                                            router_path.mcp_id
-                                        );
-                                        let message = format!(
-                                            "服务 {} 正在初始化中，请稍后再试",
-                                            router_path.mcp_id
-                                        );
-                                        let http_result: HttpResult<String> =
-                                            HttpResult::error("0003", &message, None);
-                                        return Ok(http_result.into_response());
-                                    }
-                                    CheckMcpStatusResponseStatus::Error(err) => {
-                                        // Error 状态：只清理，不重启
-                                        // 避免有问题的 MCP 服务无限重启循环
-                                        warn!(
-                                            "[MCP status check] mcp_id={} status is Error: {}, clean up resources and return error",
-                                            router_path.mcp_id, err
-                                        );
-                                        // 清理资源
-                                        if let Err(e) = proxy_manager
-                                            .cleanup_resources(&router_path.mcp_id)
-                                            .await
-                                        {
-                                            error!(
-                                                "[MCP status check] mcp_id={} Failed to clean up resources: {}",
-                                                router_path.mcp_id, e
+                            // ===== 有界等待服务就绪（Pending / 启动锁被占）=====
+                            // jar 客户端（mcp-core 0.18.2 streamable transport）对业务
+                            // 503 的请求 POST 不报错也不重试，pendingResponses 会挂到
+                            // requestTimeout（默认 30 分钟）——正常拉起窗口（uvx/npx
+                            // 下载、并发请求持锁做健康检查）内必须等待而不是立刻拒绝。
+                            // 上限 15s 覆盖常规拉起；超时仍 503（真正异常时客户端可见）。
+                            let wait_deadline =
+                                tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+
+                            let startup_guard = loop {
+                                if let Some(service_status) =
+                                    proxy_manager.get_mcp_service_status(&router_path.mcp_id)
+                                {
+                                    match &service_status.check_mcp_status_response_status {
+                                        CheckMcpStatusResponseStatus::Pending => {
+                                            if tokio::time::Instant::now() >= wait_deadline {
+                                                debug!(
+                                                    "[MCP status check] mcp_id={} still Pending after bounded wait, return 503",
+                                                    router_path.mcp_id
+                                                );
+                                                let message = format!(
+                                                    "服务 {} 正在初始化中，请稍后再试",
+                                                    router_path.mcp_id
+                                                );
+                                                let http_result: HttpResult<String> =
+                                                    HttpResult::error("0003", &message, None);
+                                                span.record("http.response.status_code", 503u16);
+                                                return Ok(http_result.into_response());
+                                            }
+                                            tokio::time::sleep(std::time::Duration::from_millis(150))
+                                                .await;
+                                            continue;
+                                        }
+                                        CheckMcpStatusResponseStatus::Error(err) => {
+                                            // Error 状态：只清理，不重启
+                                            // 避免有问题的 MCP 服务无限重启循环
+                                            warn!(
+                                                "[MCP status check] mcp_id={} status is Error: {}, clean up resources and return error",
+                                                router_path.mcp_id, err
+                                            );
+                                            // 清理资源
+                                            if let Err(e) = proxy_manager
+                                                .cleanup_resources(&router_path.mcp_id)
+                                                .await
+                                            {
+                                                error!(
+                                                    "[MCP status check] mcp_id={} Failed to clean up resources: {}",
+                                                    router_path.mcp_id, e
+                                                );
+                                            }
+                                            // 返回错误，不尝试重启
+                                            let message = format!(
+                                                "服务 {} 启动失败: {}",
+                                                router_path.mcp_id, err
+                                            );
+                                            let http_result: HttpResult<String> =
+                                                HttpResult::error("0005", &message, None);
+                                            span.record("http.response.status_code", 503u16);
+                                            return Ok(http_result.into_response());
+                                        }
+                                        CheckMcpStatusResponseStatus::Ready => {
+                                            debug!(
+                                                "[MCP status check] mcp_id={} status is Ready, continue to check the backend health status",
+                                                router_path.mcp_id
                                             );
                                         }
-                                        // 返回错误，不尝试重启
-                                        let message = format!(
-                                            "服务 {} 启动失败: {}",
-                                            router_path.mcp_id, err
-                                        );
-                                        let http_result: HttpResult<String> =
-                                            HttpResult::error("0005", &message, None);
-                                        return Ok(http_result.into_response());
-                                    }
-                                    CheckMcpStatusResponseStatus::Ready => {
-                                        debug!(
-                                            "[MCP status check] mcp_id={} status is Ready, continue to check the backend health status",
-                                            router_path.mcp_id
-                                        );
                                     }
                                 }
-                            }
 
-                            // ===== 检查启动锁状态 =====
-                            // 如果锁被占用，说明服务正在启动中
-                            let startup_guard = GLOBAL_RESTART_TRACKER
-                                .try_acquire_startup_lock(&router_path.mcp_id);
-
-                            if startup_guard.is_none() {
-                                // 锁被占用，服务正在启动中，返回 503
-                                debug!(
-                                    "[Startup lock check] mcp_id={} The startup lock is occupied, the service is starting, and 503 is returned.",
-                                    router_path.mcp_id
-                                );
-                                span.record("mcp.startup_in_progress", true);
-                                let message =
-                                    format!("服务 {} 正在启动中，请稍后再试", router_path.mcp_id);
-                                let http_result: HttpResult<String> =
-                                    HttpResult::error("0003", &message, None);
-                                span.record("http.response.status_code", 503u16);
-                                return Ok(http_result.into_response());
-                            }
+                                // ===== 检查启动锁状态 =====
+                                if let Some(guard) = GLOBAL_RESTART_TRACKER
+                                    .try_acquire_startup_lock(&router_path.mcp_id)
+                                {
+                                    break guard;
+                                }
+                                if tokio::time::Instant::now() >= wait_deadline {
+                                    debug!(
+                                        "[Startup lock check] mcp_id={} startup lock still held after bounded wait, return 503",
+                                        router_path.mcp_id
+                                    );
+                                    span.record("mcp.startup_in_progress", true);
+                                    let message =
+                                        format!("服务 {} 正在启动中，请稍后再试", router_path.mcp_id);
+                                    let http_result: HttpResult<String> =
+                                        HttpResult::error("0003", &message, None);
+                                    span.record("http.response.status_code", 503u16);
+                                    return Ok(http_result.into_response());
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                            };
 
                             // 获取到锁，现在可以安全地检查健康状态
-                            let _startup_guard = startup_guard.unwrap();
+                            let _startup_guard = startup_guard;
                             debug!(
                                 "[Start lock check] mcp_id={} Successfully obtained the startup lock and started health check",
                                 router_path.mcp_id

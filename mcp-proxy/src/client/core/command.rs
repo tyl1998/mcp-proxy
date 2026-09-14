@@ -10,7 +10,8 @@ use crate::proxy::{StreamProxyHandler, ToolFilter};
 
 // 使用 mcp-streamable-proxy 的类型（rmcp 0.12，process-wrap 9.0）
 use mcp_streamable_proxy::{
-    ClientCapabilities, ClientInfo, Implementation, ServiceExt, TokioChildProcess, stdio,
+    ClientCapabilities, ClientInfo, Implementation, ProtocolVersion, ServiceExt,
+    TokioChildProcess, stdio,
 };
 
 use crate::client::support::utils::truncate_str;
@@ -151,15 +152,20 @@ pub async fn run_command_mode(
 }
 
 /// 创建 ClientInfo（使用 rmcp 1.1.0 类型）
+/// roots/sampling caps 在 rmcp-soddygo 1.8.0 被 SEP-2577 标记 deprecated，
+/// 但现存 MCP server 仍按老 spec 检查，保留声明以兼容。
+#[expect(deprecated, reason = "keep legacy caps for old MCP servers")]
 fn create_client_info() -> ClientInfo {
     let capabilities = ClientCapabilities::builder()
         .enable_experimental()
         .enable_roots()
         .enable_roots_list_changed()
         .enable_sampling()
+        .enable_elicitation()
         .build();
     ClientInfo::new(
         capabilities,
         Implementation::new("mcp-proxy-cli", env!("CARGO_PKG_VERSION")),
     )
+    .with_protocol_version(ProtocolVersion::V_2026_07_28)
 }
