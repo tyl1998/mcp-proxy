@@ -2,8 +2,24 @@
 # 多阶段构建，用于构建 mcp-proxy
 # 与线上环境保持依赖一致
 
+# syntax=docker/dockerfile:1
+
 # ==============================================================================
-# 第一阶段：构建阶段
+# 第一阶段：cargo-chef recipe（仅提取依赖清单）
+# ==============================================================================
+FROM rust:1.92 AS chef
+WORKDIR /build
+RUN cargo install cargo-chef
+
+# ==============================================================================
+# 第二阶段：生成 recipe.json
+# ==============================================================================
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ==============================================================================
+# 第三阶段：构建阶段（依赖层可缓存）
 # ==============================================================================
 FROM rust:1.92 AS builder
 
@@ -47,7 +63,19 @@ RUN apt-get update && apt-get install -y \
 # 设置 libclang 路径 (bindgen 需要)
 ENV LIBCLANG_PATH=/usr/lib/llvm-14/lib
 
-# 复制源代码（复制所有 workspace 成员）
+# 从 chef 阶段复制 cargo-chef binary
+COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/bin/cargo-chef
+
+# 根据 TARGETARCH 设置交叉编译环境
+RUN if [ "$TARGETARCH" = "arm64" ]; then apt-get update && apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu; fi
+
+# ===== 缓存层：仅编译依赖（源码变化不会失效） =====
+COPY --from=planner /build/recipe.json recipe.json
+# vendor 目录必须在 cook 之前复制（recipe.json 引用 vendor/... 路径）
+COPY vendor/ ./vendor/
+RUN cargo chef cook --release --recipe-path recipe.json --bin mcp-proxy
+
+# ===== 实际构建：仅重新编译项目代码 =====
 COPY Cargo.toml Cargo.lock ./
 COPY mcp-common/ ./mcp-common/
 COPY mcp-sse-proxy/ ./mcp-sse-proxy/
@@ -57,15 +85,7 @@ COPY oss-client/ ./oss-client/
 COPY document-parser/ ./document-parser/
 COPY voice-cli/ ./voice-cli/
 COPY fastembed/ ./fastembed/
-# vendored 依赖（rmcp 等本地补丁）在 Cargo.toml 中通过 path = "vendor/..." 引用，必须一并复制
-COPY vendor/ ./vendor/
 
-# 根据 TARGETARCH 设置交叉编译环境
-RUN echo "=== Starting build process ==="
-RUN echo "Target architecture: $TARGETARCH"
-RUN if [ "$TARGETARCH" = "arm64" ]; then echo "Building for ARM64 architecture..." && apt-get update && apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu; else echo "Building for x86_64 architecture..."; fi
-
-# 构建 mcp-stdio-proxy
 RUN cargo build --release --bin mcp-proxy
 
 # ==============================================================================

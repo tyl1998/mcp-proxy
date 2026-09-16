@@ -989,7 +989,7 @@ where
     // let mut stream = std::pin::pin!(stream);
     let serve_loop_ct = ct.child_token();
     let peer_return: Peer<R> = peer.clone();
-    let current_span = tracing::Span::current();
+    let current_span = tracing::Span::none();
     let handle = spawn_service_task(async move {
         let mut transport = transport.into_transport();
         let mut batch_messages = VecDeque::<RxJsonRpcMessage<R>>::new();
